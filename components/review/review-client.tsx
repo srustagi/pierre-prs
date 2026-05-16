@@ -607,7 +607,6 @@ export function ReviewClient({ owner, repo, pull, files, threads }: Props) {
                         lineHoverHighlight: "both",
                         hunkSeparators: "line-info",
                         enableGutterUtility: true,
-                        disableLineNumbers: mobileReviewMode,
                         onLineClick: (line: OnDiffLineClickProps) => selectLine(file, line),
                         enableLineSelection: true,
                         onLineSelected: (range: SelectedLineRange | null) => selectRange(file, range),
