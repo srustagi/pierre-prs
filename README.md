@@ -1,3 +1,5 @@
+# 100% vibe coded. purely for convenience.
+
 # Pierre PRs
 
 Pierre PRs is a minimal GitHub pull request review UI built with Next.js, Chakra UI, NextAuth, Octokit, and `@pierre/diffs`.
