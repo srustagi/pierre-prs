@@ -10,6 +10,7 @@ export type ReviewCoordinate = {
   side: DiffSide;
   start_line?: number;
   start_side?: DiffSide;
+  diff_index: number;
 };
 
 export type RenderedDiffFile = PullFile & {
@@ -51,34 +52,25 @@ export function coordinateForSelection(
 ) {
   const normalizedEnd = end ?? start;
   const normalizedEndSide = endSide ?? side;
+  const startAnchor = file.coordinates[coordinateKey(side, start)];
+  const endAnchor = file.coordinates[coordinateKey(normalizedEndSide, normalizedEnd)];
 
-  if (side !== normalizedEndSide) {
+  if (!startAnchor || !endAnchor) {
     return null;
   }
 
-  const first = Math.min(start, normalizedEnd);
-  const last = Math.max(start, normalizedEnd);
-  const anchor = file.coordinates[coordinateKey(side, last)];
+  const [rangeStart, rangeEnd] =
+    startAnchor.diff_index <= endAnchor.diff_index ? [startAnchor, endAnchor] : [endAnchor, startAnchor];
 
-  if (!anchor) {
-    return null;
-  }
-
-  if (first !== last) {
-    const startAnchor = file.coordinates[coordinateKey(side, first)];
-
-    if (!startAnchor) {
-      return null;
-    }
-
+  if (rangeStart.line !== rangeEnd.line || rangeStart.side !== rangeEnd.side) {
     return {
-      ...anchor,
-      start_line: startAnchor.line,
-      start_side: startAnchor.side,
+      ...rangeEnd,
+      start_line: rangeStart.line,
+      start_side: rangeStart.side,
     };
   }
 
-  return anchor;
+  return rangeEnd;
 }
 
 function buildPatch(file: PullFile) {
@@ -107,6 +99,7 @@ function buildCoordinates(file: PullFile, commitId: string) {
   const coordinates: Record<string, ReviewCoordinate> = {};
   let oldLine = 0;
   let newLine = 0;
+  let diffIndex = 0;
 
   for (const rawLine of file.patch?.split("\n") ?? []) {
     if (rawLine === "") {
@@ -131,8 +124,10 @@ function buildCoordinates(file: PullFile, commitId: string) {
         commit_id: commitId,
         line: newLine,
         side: "RIGHT",
+        diff_index: diffIndex,
       };
       newLine += 1;
+      diffIndex += 1;
       continue;
     }
 
@@ -142,25 +137,30 @@ function buildCoordinates(file: PullFile, commitId: string) {
         commit_id: commitId,
         line: oldLine,
         side: "LEFT",
+        diff_index: diffIndex,
       };
       oldLine += 1;
+      diffIndex += 1;
       continue;
     }
 
     coordinates[coordinateKey("deletions", oldLine)] = {
       path: file.filename,
       commit_id: commitId,
-      line: oldLine,
-      side: "LEFT",
+      line: newLine,
+      side: "RIGHT",
+      diff_index: diffIndex,
     };
     coordinates[coordinateKey("additions", newLine)] = {
       path: file.filename,
       commit_id: commitId,
       line: newLine,
       side: "RIGHT",
+      diff_index: diffIndex,
     };
     oldLine += 1;
     newLine += 1;
+    diffIndex += 1;
   }
 
   return coordinates;

@@ -65,8 +65,20 @@ type DraftComment = {
   path: string;
   side: PierreSide;
   line: number;
+  startSide: PierreSide;
+  start: number;
+  end: number;
+  endSide?: PierreSide;
   body: string;
   coordinate: ReviewCoordinate;
+};
+
+type SelectedReviewRange = {
+  path: string;
+  side: PierreSide;
+  start: number;
+  end: number;
+  endSide?: PierreSide;
 };
 
 type AnnotationMeta =
@@ -120,12 +132,7 @@ function useIsMobileReviewMode() {
 
 export function ReviewClient({ owner, repo, pull, files, threads }: Props) {
   const router = useRouter();
-  const [selected, setSelected] = useState<{
-    path: string;
-    side: PierreSide;
-    start: number;
-    end: number;
-  } | null>(null);
+  const [selected, setSelected] = useState<SelectedReviewRange | null>(null);
   const [draftBody, setDraftBody] = useState("");
   const [drafts, setDrafts] = useState<DraftComment[]>([]);
   const [summary, setSummary] = useState("");
@@ -187,7 +194,7 @@ export function ReviewClient({ owner, repo, pull, files, threads }: Props) {
 
     const file = filesByPath.get(selected.path);
     const coordinate = file
-      ? coordinateForSelection(file, selected.start, selected.side, selected.end, selected.side)
+      ? coordinateForSelection(file, selected.start, selected.side, selected.end, selected.endSide)
       : null;
 
     if (!coordinate) {
@@ -200,8 +207,12 @@ export function ReviewClient({ owner, repo, pull, files, threads }: Props) {
       {
         id: `${selected.path}:${selected.side}:${selected.start}:${selected.end}:${Date.now()}`,
         path: selected.path,
-        side: selected.side,
-        line: coordinate.line,
+        side: selected.endSide ?? selected.side,
+        line: selected.end,
+        startSide: selected.side,
+        start: selected.start,
+        end: selected.end,
+        endSide: selected.endSide,
         body: draftBody.trim(),
         coordinate,
       },
@@ -241,15 +252,20 @@ export function ReviewClient({ owner, repo, pull, files, threads }: Props) {
         body: JSON.stringify({
           owner,
           repo,
-          pullNumber: pull.number,
-          event,
-          body: summary,
-          comments: drafts.map((draft) => ({
-            ...draft.coordinate,
-            body: draft.body,
-          })),
-        }),
-      });
+	          pullNumber: pull.number,
+	          event,
+	          body: summary,
+	          comments: drafts.map((draft) => ({
+	            path: draft.coordinate.path,
+	            commit_id: draft.coordinate.commit_id,
+	            line: draft.coordinate.line,
+	            side: draft.coordinate.side,
+	            start_line: draft.coordinate.start_line,
+	            start_side: draft.coordinate.start_side,
+	            body: draft.body,
+	          })),
+	        }),
+	      });
 
       if (!response.ok) {
         const payload = (await response.json()) as { error?: string };
@@ -451,6 +467,9 @@ export function ReviewClient({ owner, repo, pull, files, threads }: Props) {
               const collapsed = collapsedPaths.includes(file.filename);
               const wrapped = !unwrappedPaths.includes(file.filename);
               const summaryForFile = fileSummaries.get(file.filename);
+              const unmappedThreads = threads.filter(
+                (thread) => thread.path === file.filename && !threadCoordinateForFile(file, thread),
+              );
 
               return (
                 <Box
@@ -641,6 +660,16 @@ export function ReviewClient({ owner, repo, pull, files, threads }: Props) {
                       <Text color="var(--pr-text-muted)">{file.status} file has no text patch from GitHub.</Text>
                     </Box>
                   ) : null}
+
+                  {!collapsed && unmappedThreads.length > 0 ? (
+                    <UnmappedThreads
+                      threads={unmappedThreads}
+                      owner={owner}
+                      repo={repo}
+                      pullNumber={pull.number}
+                      onChanged={() => router.refresh()}
+                    />
+                  ) : null}
                 </Box>
               );
             })}
@@ -673,12 +702,13 @@ export function ReviewClient({ owner, repo, pull, files, threads }: Props) {
 
     setActivePath(file.filename);
 
-    if (line.event.shiftKey && selected?.path === file.filename && selected.side === line.annotationSide) {
+    if (line.event.shiftKey && selected?.path === file.filename) {
       setSelected({
         path: file.filename,
-        side: line.annotationSide,
+        side: selected.side,
         start: selected.start,
         end: line.lineNumber,
+        endSide: line.annotationSide,
       });
       setMessage("");
       return;
@@ -689,6 +719,7 @@ export function ReviewClient({ owner, repo, pull, files, threads }: Props) {
       side: line.annotationSide,
       start: line.lineNumber,
       end: line.lineNumber,
+      endSide: line.annotationSide,
     });
     setMessage("");
   }
@@ -698,10 +729,8 @@ export function ReviewClient({ owner, repo, pull, files, threads }: Props) {
       return;
     }
 
-    const endSide = range.endSide ?? range.side;
-
-    if (range.side !== endSide) {
-      setMessage("Select lines on one side of the diff to comment.");
+    if (!coordinateForSelection(file, range.start, range.side, range.end, range.endSide)) {
+      setMessage("That range cannot be commented on in GitHub.");
       return;
     }
 
@@ -711,6 +740,7 @@ export function ReviewClient({ owner, repo, pull, files, threads }: Props) {
       side: range.side,
       start: range.start,
       end: range.end,
+      endSide: range.endSide ?? range.side,
     });
     setMessage("");
   }
@@ -726,6 +756,7 @@ export function ReviewClient({ owner, repo, pull, files, threads }: Props) {
       side,
       start: lineNumber,
       end: lineNumber,
+      endSide: side,
     });
     setMessage("");
   }
@@ -1062,9 +1093,9 @@ function ReviewTray({
                 bg="var(--pr-yellow-soft)"
                 p={3}
               >
-                <Text color="var(--pr-yellow)" fontSize="xs" fontWeight="510" overflowWrap="anywhere">
-                  {draft.path}:{draft.line}
-                </Text>
+	                <Text color="var(--pr-yellow)" fontSize="xs" fontWeight="510" overflowWrap="anywhere">
+	                  {formatDraftRange(draft)}
+	                </Text>
                 <Text color="var(--pr-text)" fontSize="sm" mt={1} lineClamp={3} whiteSpace="pre-wrap">
                   {draft.body}
                 </Text>
@@ -1184,18 +1215,20 @@ function annotationsForFile(
   file: RenderedDiffFile,
   threads: ReviewThread[],
   drafts: DraftComment[],
-  selected: { path: string; side: PierreSide; start: number; end: number } | null,
+  selected: SelectedReviewRange | null,
 ) {
   const annotations: DiffLineAnnotation<AnnotationMeta>[] = [];
 
   for (const thread of threads) {
-    if (thread.path !== file.filename || !thread.line || !thread.side) {
+    const coordinate = threadCoordinateForFile(file, thread);
+
+    if (!coordinate) {
       continue;
     }
 
     annotations.push({
-      side: toPierreSide(thread.side),
-      lineNumber: thread.line,
+      side: coordinate.side,
+      lineNumber: coordinate.line,
       metadata: {
         kind: "thread",
         thread,
@@ -1220,8 +1253,8 @@ function annotationsForFile(
 
   if (selected?.path === file.filename) {
     annotations.push({
-      side: selected.side,
-      lineNumber: Math.max(selected.start, selected.end),
+      side: selected.endSide ?? selected.side,
+      lineNumber: selected.end,
       metadata: {
         kind: "selection",
       },
@@ -1229,6 +1262,32 @@ function annotationsForFile(
   }
 
   return annotations;
+}
+
+function threadCoordinateForFile(file: RenderedDiffFile, thread: ReviewThread) {
+  if (thread.path !== file.filename || !thread.line || !thread.side) {
+    return null;
+  }
+
+  const side = toPierreSide(thread.side);
+  const directCoordinate = file.coordinates[`${side}:${thread.line}`];
+
+  if (directCoordinate) {
+    return { side, line: thread.line };
+  }
+
+  if (thread.side === "RIGHT") {
+    const contextCoordinate = Object.entries(file.coordinates).find(
+      ([key, coordinate]) =>
+        key.startsWith("deletions:") && coordinate.side === "RIGHT" && coordinate.line === thread.line,
+    );
+
+    if (contextCoordinate) {
+      return { side: "deletions" as const, line: Number(contextCoordinate[0].split(":")[1]) };
+    }
+  }
+
+  return null;
 }
 
 function Annotation({
@@ -1251,7 +1310,7 @@ function Annotation({
   owner: string;
   repo: string;
   pullNumber: number;
-  selected: { path: string; side: PierreSide; start: number; end: number } | null;
+  selected: SelectedReviewRange | null;
   draftBody: string;
   editingDraftId: string | null;
   onDraftBodyChange: (body: string) => void;
@@ -1296,18 +1355,17 @@ function Annotation({
         borderColor="rgba(94, 106, 210, 0.5)"
         rounded="8px"
         shadow="none"
-      >
-        <Card.Body p={3} gap={3}>
-          <HStack gap={2} wrap="wrap">
-            <Badge bg="var(--pr-accent-soft)" color="#b8bdf8" borderWidth="0.5px" borderColor="rgba(94, 106, 210, 0.36)">
-              {selected.side === "additions" ? "Right side" : "Left side"}
-            </Badge>
-            <Text color="var(--pr-text)" fontWeight="510" overflowWrap="anywhere">
-              {selected.path}:{Math.min(selected.start, selected.end)}
-              {selected.end !== selected.start ? `-${Math.max(selected.start, selected.end)}` : ""}
-            </Text>
-          </HStack>
-          <Textarea
+	      >
+	        <Card.Body p={3} gap={3}>
+	          <HStack gap={2} wrap="wrap">
+	            <Badge bg="var(--pr-accent-soft)" color="#b8bdf8" borderWidth="0.5px" borderColor="rgba(94, 106, 210, 0.36)">
+	              {formatSelectedSides(selected)}
+	            </Badge>
+	            <Text color="var(--pr-text)" fontWeight="510" overflowWrap="anywhere">
+	              {formatSelectedRange(selected)}
+	            </Text>
+	          </HStack>
+	          <Textarea
             value={draftBody}
             minH="72px"
             resize="vertical"
@@ -1376,6 +1434,40 @@ function Annotation({
       pullNumber={pullNumber}
       onChanged={onChanged}
     />
+  );
+}
+
+function UnmappedThreads({
+  threads,
+  owner,
+  repo,
+  pullNumber,
+  onChanged,
+}: {
+  threads: ReviewThread[];
+  owner: string;
+  repo: string;
+  pullNumber: number;
+  onChanged: () => void;
+}) {
+  return (
+    <Box px={3} py={3} borderTopWidth="0.5px" borderColor="var(--pr-border)" bg="var(--pr-bg-elevated)">
+      <Text color="var(--pr-text-muted)" fontSize="12px" fontWeight="510" mb={2}>
+        Conversations not anchored in the current diff
+      </Text>
+      <Stack gap={2}>
+        {threads.map((thread) => (
+          <ThreadAnnotation
+            key={thread.id}
+            thread={thread}
+            owner={owner}
+            repo={repo}
+            pullNumber={pullNumber}
+            onChanged={onChanged}
+          />
+        ))}
+      </Stack>
+    </Box>
   );
 }
 
@@ -1563,15 +1655,20 @@ function ThreadAnnotation({
     >
       <Card.Body p={3} gap={3}>
         <Flex align="center" justify="space-between" gap={3}>
-          <Badge
-            bg={thread.isResolved ? "rgba(76, 183, 130, 0.14)" : "var(--pr-accent-soft)"}
-            color={thread.isResolved ? "var(--pr-green)" : "#b8bdf8"}
-            borderWidth="0.5px"
-            borderColor={thread.isResolved ? "rgba(76, 183, 130, 0.3)" : "rgba(94, 106, 210, 0.36)"}
-            width="fit-content"
-          >
-            {thread.isResolved ? "Resolved" : "Unresolved conversation"}
-          </Badge>
+          <HStack gap={2} wrap="wrap">
+            <Badge
+              bg={thread.isResolved ? "rgba(76, 183, 130, 0.14)" : "var(--pr-accent-soft)"}
+              color={thread.isResolved ? "var(--pr-green)" : "#b8bdf8"}
+              borderWidth="0.5px"
+              borderColor={thread.isResolved ? "rgba(76, 183, 130, 0.3)" : "rgba(94, 106, 210, 0.36)"}
+              width="fit-content"
+            >
+              {thread.isResolved ? "Resolved" : "Unresolved conversation"}
+            </Badge>
+            <Text color="var(--pr-text-muted)" fontSize="12px" overflowWrap="anywhere">
+              {formatThreadRange(thread)}
+            </Text>
+          </HStack>
           <Button
             variant="outline"
             bg="var(--pr-surface-subtle)"
@@ -1834,6 +1931,49 @@ function filterIcon(filter: FileFilter) {
   }
 
   return <FiList aria-hidden="true" />;
+}
+
+function formatSelectedSides(selected: SelectedReviewRange) {
+  const startSide = selected.side === "additions" ? "Right" : "Left";
+  const endSide = (selected.endSide ?? selected.side) === "additions" ? "Right" : "Left";
+
+  return startSide === endSide ? `${startSide} side` : `${startSide} to ${endSide}`;
+}
+
+function formatSelectedRange(selected: SelectedReviewRange) {
+  const endSide = selected.endSide ?? selected.side;
+
+  if (selected.side === endSide) {
+    const first = Math.min(selected.start, selected.end);
+    const last = Math.max(selected.start, selected.end);
+    return `${selected.path}:${first}${first === last ? "" : `-${last}`}`;
+  }
+
+  return `${selected.path}:${selected.start} -> ${selected.end}`;
+}
+
+function formatDraftRange(draft: DraftComment) {
+  const endSide = draft.endSide ?? draft.side;
+
+  if (draft.startSide === endSide) {
+    const first = Math.min(draft.start, draft.end);
+    const last = Math.max(draft.start, draft.end);
+    return `${draft.path}:${first}${first === last ? "" : `-${last}`}`;
+  }
+
+  return `${draft.path}:${draft.start} -> ${draft.end}`;
+}
+
+function formatThreadRange(thread: ReviewThread) {
+  if (!thread.startLine || !thread.line) {
+    return thread.line ? `${thread.path}:${thread.line}` : thread.path;
+  }
+
+  if (thread.startLine === thread.line && thread.startSide === thread.side) {
+    return `${thread.path}:${thread.line}`;
+  }
+
+  return `${thread.path}:${thread.startLine} -> ${thread.line}`;
 }
 
 function statusBadgeStyle(status: string) {
