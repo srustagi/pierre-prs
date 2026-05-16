@@ -150,6 +150,8 @@ export function ReviewClient({ owner, repo, pull, files, threads }: Props) {
   const mobileReviewMode = useIsMobileReviewMode();
 
   const filesByPath = useMemo(() => new Map(files.map((file) => [file.filename, file])), [files]);
+  const renderedPaths = useMemo(() => new Set(files.map((file) => file.filename)), [files]);
+  const orphanedThreads = threads.filter((thread) => !renderedPaths.has(thread.path));
   const fileSummaries = useMemo(
     () =>
       new Map(
@@ -673,6 +675,17 @@ export function ReviewClient({ owner, repo, pull, files, threads }: Props) {
                 </Box>
               );
             })}
+
+            {orphanedThreads.length > 0 ? (
+              <UnmappedThreads
+                title="Conversations for files not in the current diff"
+                threads={orphanedThreads}
+                owner={owner}
+                repo={repo}
+                pullNumber={pull.number}
+                onChanged={() => router.refresh()}
+              />
+            ) : null}
           </Stack>
         </Box>
 
@@ -1438,12 +1451,14 @@ function Annotation({
 }
 
 function UnmappedThreads({
+  title = "Conversations not anchored in the current diff",
   threads,
   owner,
   repo,
   pullNumber,
   onChanged,
 }: {
+  title?: string;
   threads: ReviewThread[];
   owner: string;
   repo: string;
@@ -1453,7 +1468,7 @@ function UnmappedThreads({
   return (
     <Box px={3} py={3} borderTopWidth="0.5px" borderColor="var(--pr-border)" bg="var(--pr-bg-elevated)">
       <Text color="var(--pr-text-muted)" fontSize="12px" fontWeight="510" mb={2}>
-        Conversations not anchored in the current diff
+        {title}
       </Text>
       <Stack gap={2}>
         {threads.map((thread) => (
@@ -1965,15 +1980,38 @@ function formatDraftRange(draft: DraftComment) {
 }
 
 function formatThreadRange(thread: ReviewThread) {
-  if (!thread.startLine || !thread.line) {
-    return thread.line ? `${thread.path}:${thread.line}` : thread.path;
+  if (!thread.line) {
+    return thread.path;
   }
 
-  if (thread.startLine === thread.line && thread.startSide === thread.side) {
+  if (!thread.startLine) {
     return `${thread.path}:${thread.line}`;
   }
 
-  return `${thread.path}:${thread.startLine} -> ${thread.line}`;
+  if (thread.startLine === thread.line) {
+    return `${thread.path}:${thread.line}`;
+  }
+
+  if (!thread.startSide || !thread.side || thread.startSide === thread.side) {
+    return `${thread.path}:${thread.startLine}-${thread.line}`;
+  }
+
+  const start = formatGitHubThreadEndpoint(thread.startSide, thread.startLine);
+  const end = formatGitHubThreadEndpoint(thread.side, thread.line);
+
+  return `${thread.path}:${start} -> ${end}`;
+}
+
+function formatGitHubThreadEndpoint(side: ReviewThread["side"], line: number) {
+  if (side === "LEFT") {
+    return `old line ${line}`;
+  }
+
+  if (side === "RIGHT") {
+    return `new line ${line}`;
+  }
+
+  return `line ${line}`;
 }
 
 function statusBadgeStyle(status: string) {
