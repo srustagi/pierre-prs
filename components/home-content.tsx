@@ -1,23 +1,30 @@
 "use client";
 
-import { Box, Container, Flex, Heading, Text, VStack } from "@chakra-ui/react";
+import { Box, Button, Container, Flex, HStack, Heading, Text, VStack } from "@chakra-ui/react";
+import { FiMoon, FiSun } from "react-icons/fi";
+import { usePrTheme } from "@/app/provider";
 import { SignInButton, SignOutButton } from "@/components/auth-button";
 import { RepoPicker } from "@/components/repo-picker";
-import type { Repo } from "@/lib/github";
+import type { RecentRepoWithPullRequests, Repo } from "@/lib/github";
 
 type Props =
   | {
       signedIn: false;
       repos?: never;
+      recentRepos?: never;
     }
   | {
       signedIn: true;
       repos: Repo[];
+      recentRepos: RecentRepoWithPullRequests[];
     };
 
 export function HomeContent(props: Props) {
+  const { theme, toggleTheme } = usePrTheme();
+  const lightMode = theme === "light";
+
   return (
-    <Box minH="100vh" bg="gray.50" color="gray.950">
+    <Box minH="100vh" bg="var(--pr-bg)" color="var(--pr-text)">
       <Container maxW="6xl" py={{ base: 8, md: 12 }}>
         <Flex
           align={{ base: "stretch", md: "flex-start" }}
@@ -27,31 +34,57 @@ export function HomeContent(props: Props) {
           mb={7}
         >
           <VStack align="flex-start" gap={3} maxW="3xl">
-            <Text color="blue.600" fontSize="sm" fontWeight="bold" textTransform="uppercase">
+            <Text
+              color="var(--pr-text-subtle)"
+              fontSize="sm"
+              fontWeight="510"
+              textTransform="uppercase"
+            >
               Pierre PRs
             </Text>
             <Heading
               as="h1"
-              size={{ base: "4xl", md: "6xl" }}
-              lineHeight="0.95"
+              size={{ base: "3xl", md: "5xl" }}
+              lineHeight="1"
               letterSpacing="normal"
+              fontWeight="510"
             >
               {props.signedIn
-                ? "Open a pull request."
+                ? "Select a pull request."
                 : "Review GitHub pull requests without GitHub's diff UI."}
             </Heading>
             {!props.signedIn ? (
-              <Text color="gray.600" fontSize="lg" lineHeight="1.6" maxW="xl">
-                Sign in, pick a repo, open a PR, and keep every review action persisted
-                back to GitHub.
+              <Text color="var(--pr-text-muted)" fontSize="md" lineHeight="1.7" maxW="xl">
+                Sign in, pick a repo, open a PR, and keep every review action
+                persisted back to GitHub.
               </Text>
             ) : null}
           </VStack>
 
-          <Box flexShrink={0}>{props.signedIn ? <SignOutButton /> : <SignInButton />}</Box>
+          <HStack gap={2} flexShrink={0} alignSelf={{ base: "flex-start", md: "auto" }}>
+            <Button
+              variant="outline"
+              aria-pressed={lightMode}
+              bg={lightMode ? "var(--pr-surface-hover)" : "var(--pr-surface)"}
+              color="var(--pr-text)"
+              h="32px"
+              px={3}
+              borderWidth="0.5px"
+              borderColor={lightMode ? "var(--pr-border-strong)" : "var(--pr-border)"}
+              rounded="full"
+              fontSize="13px"
+              fontWeight="510"
+              _hover={{ bg: "var(--pr-surface-hover)", borderColor: "var(--pr-border-strong)" }}
+              onClick={toggleTheme}
+            >
+              {lightMode ? <FiMoon aria-hidden="true" /> : <FiSun aria-hidden="true" />}
+              {lightMode ? "Dark mode" : "Light mode"}
+            </Button>
+            {props.signedIn ? <SignOutButton /> : <SignInButton />}
+          </HStack>
         </Flex>
 
-        {props.signedIn ? <RepoPicker repos={props.repos} /> : null}
+        {props.signedIn ? <RepoPicker repos={props.repos} recentRepos={props.recentRepos} /> : null}
       </Container>
     </Box>
   );

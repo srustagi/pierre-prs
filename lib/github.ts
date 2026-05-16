@@ -26,6 +26,17 @@ export type PullRequest = {
   changedFiles: number;
 };
 
+export type PullRequestSummary = Pick<
+  PullRequest,
+  "number" | "title" | "draft" | "updatedAt" | "htmlUrl" | "author"
+>;
+
+export type RecentRepoWithPullRequests = Repo & {
+  openPullRequestCount: number;
+  latestPullUpdatedAt: string;
+  recentPullRequests: PullRequestSummary[];
+};
+
 export type PullFile = {
   filename: string;
   previousFilename?: string;
@@ -101,6 +112,72 @@ export async function getRepos() {
     private: repo.private,
     updatedAt: repo.updated_at,
   })) satisfies Repo[];
+}
+
+export async function getRecentReposWithPullRequests() {
+  const octokit = await getOctokit();
+  const result = await octokit.graphql<RecentReposWithPullRequestsResponse>(
+    `query RecentReposWithPullRequests {
+      viewer {
+        repositories(
+          first: 100
+          affiliations: [OWNER, COLLABORATOR, ORGANIZATION_MEMBER]
+          orderBy: { field: UPDATED_AT, direction: DESC }
+        ) {
+          nodes {
+            databaseId
+            name
+            nameWithOwner
+            isPrivate
+            updatedAt
+            owner {
+              login
+            }
+            pullRequests(
+              states: OPEN
+              first: 3
+              orderBy: { field: UPDATED_AT, direction: DESC }
+            ) {
+              totalCount
+              nodes {
+                number
+                title
+                isDraft
+                updatedAt
+                url
+                author {
+                  login
+                }
+              }
+            }
+          }
+        }
+      }
+    }`,
+  );
+
+  return result.viewer.repositories.nodes
+    .filter((repo) => repo.pullRequests.nodes.length > 0)
+    .map((repo) => ({
+      id: repo.databaseId ?? 0,
+      fullName: repo.nameWithOwner,
+      owner: repo.owner.login,
+      name: repo.name,
+      private: repo.isPrivate,
+      updatedAt: repo.updatedAt,
+      openPullRequestCount: repo.pullRequests.totalCount,
+      latestPullUpdatedAt: repo.pullRequests.nodes[0].updatedAt,
+      recentPullRequests: repo.pullRequests.nodes.map((pull) => ({
+        number: pull.number,
+        title: pull.title,
+        draft: pull.isDraft,
+        updatedAt: pull.updatedAt,
+        htmlUrl: pull.url,
+        author: pull.author?.login ?? null,
+      })),
+    }))
+    .sort((a, b) => Date.parse(b.latestPullUpdatedAt) - Date.parse(a.latestPullUpdatedAt))
+    .slice(0, 10) satisfies RecentRepoWithPullRequests[];
 }
 
 export async function getPullRequests(owner: string, repo: string, search?: string) {
@@ -391,4 +468,34 @@ type ReviewThreadCommentNode = {
   replyTo?: {
     databaseId: number | null;
   } | null;
+};
+
+type RecentReposWithPullRequestsResponse = {
+  viewer: {
+    repositories: {
+      nodes: Array<{
+        databaseId: number | null;
+        name: string;
+        nameWithOwner: string;
+        isPrivate: boolean;
+        updatedAt: string;
+        owner: {
+          login: string;
+        };
+        pullRequests: {
+          totalCount: number;
+          nodes: Array<{
+            number: number;
+            title: string;
+            isDraft: boolean;
+            updatedAt: string;
+            url: string;
+            author: {
+              login: string;
+            } | null;
+          }>;
+        };
+      }>;
+    };
+  };
 };

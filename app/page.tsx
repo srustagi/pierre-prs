@@ -1,6 +1,6 @@
 import { HomeContent } from "@/components/home-content";
 import { getAuthSession } from "@/lib/auth";
-import { getRepos } from "@/lib/github";
+import { getRecentReposWithPullRequests, getRepos } from "@/lib/github";
 
 export default async function Home() {
   const session = await getAuthSession();
@@ -9,7 +9,10 @@ export default async function Home() {
     return <HomeContent signedIn={false} />;
   }
 
-  const repos = await getRepos();
+  const [repos, recentRepos] = await Promise.all([
+    getRepos(),
+    getRecentReposWithPullRequests().catch(() => []),
+  ]);
 
-  return <HomeContent signedIn repos={repos} />;
+  return <HomeContent signedIn repos={repos} recentRepos={recentRepos} />;
 }
