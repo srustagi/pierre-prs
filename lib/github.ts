@@ -1,0 +1,394 @@
+import { Octokit } from "@octokit/rest";
+import { requireAccessToken } from "@/lib/auth";
+
+export type Repo = {
+  id: number;
+  fullName: string;
+  owner: string;
+  name: string;
+  private: boolean;
+  updatedAt: string | null;
+};
+
+export type PullRequest = {
+  number: number;
+  title: string;
+  state: string;
+  draft: boolean;
+  updatedAt: string;
+  htmlUrl: string;
+  author: string | null;
+  headSha: string;
+  headRef: string;
+  baseRef: string;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+};
+
+export type PullFile = {
+  filename: string;
+  previousFilename?: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  changes: number;
+  patch?: string;
+  blobUrl: string;
+};
+
+export type ReviewThreadComment = {
+  id: string;
+  databaseId: number | null;
+  body: string;
+  url: string;
+  createdAt: string;
+  author: {
+    login: string;
+    avatarUrl: string;
+    url: string;
+  } | null;
+  path: string;
+  line: number | null;
+  side: "LEFT" | "RIGHT" | null;
+  replyToDatabaseId?: number | null;
+};
+
+export type ReviewThread = {
+  id: string;
+  isResolved: boolean;
+  path: string;
+  line: number | null;
+  side: "LEFT" | "RIGHT" | null;
+  startLine: number | null;
+  startSide: "LEFT" | "RIGHT" | null;
+  comments: ReviewThreadComment[];
+};
+
+export type ReviewCommentDraft = {
+  path: string;
+  body: string;
+  commit_id: string;
+  line: number;
+  side: "LEFT" | "RIGHT";
+  start_line?: number;
+  start_side?: "LEFT" | "RIGHT";
+};
+
+export type SubmitReviewInput = {
+  owner: string;
+  repo: string;
+  pullNumber: number;
+  event: "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
+  body: string;
+  comments: ReviewCommentDraft[];
+};
+
+export async function getRepos() {
+  const octokit = await getOctokit();
+  const repos = await octokit.paginate(octokit.rest.repos.listForAuthenticatedUser, {
+    affiliation: "owner,collaborator,organization_member",
+    sort: "updated",
+    direction: "desc",
+    per_page: 100,
+  });
+
+  return repos.map((repo) => ({
+    id: repo.id,
+    fullName: repo.full_name,
+    owner: repo.owner.login,
+    name: repo.name,
+    private: repo.private,
+    updatedAt: repo.updated_at,
+  })) satisfies Repo[];
+}
+
+export async function getPullRequests(owner: string, repo: string, search?: string) {
+  const octokit = await getOctokit();
+  const pulls = await octokit.paginate(octokit.rest.pulls.list, {
+    owner,
+    repo,
+    state: "open",
+    sort: "updated",
+    direction: "desc",
+    per_page: 30,
+  });
+  const query = search?.trim().toLowerCase();
+  const filtered = query
+    ? pulls.filter((pull) => {
+        const numberMatch = String(pull.number) === query.replace(/^#/, "");
+        return numberMatch || pull.title.toLowerCase().includes(query);
+      })
+    : pulls.slice(0, 10);
+
+  return filtered.slice(0, 10).map(toPullRequest) satisfies PullRequest[];
+}
+
+export async function getPullRequest(owner: string, repo: string, pullNumber: number) {
+  const octokit = await getOctokit();
+  const { data } = await octokit.rest.pulls.get({
+    owner,
+    repo,
+    pull_number: pullNumber,
+  });
+
+  return toPullRequest(data);
+}
+
+export async function getPullFiles(owner: string, repo: string, pullNumber: number) {
+  const octokit = await getOctokit();
+  const files = await octokit.paginate(octokit.rest.pulls.listFiles, {
+    owner,
+    repo,
+    pull_number: pullNumber,
+    per_page: 100,
+  });
+
+  return files.map((file) => ({
+    filename: file.filename,
+    previousFilename: file.previous_filename,
+    status: file.status,
+    additions: file.additions,
+    deletions: file.deletions,
+    changes: file.changes,
+    patch: file.patch,
+    blobUrl: file.blob_url,
+  })) satisfies PullFile[];
+}
+
+export async function getReviewThreads(owner: string, repo: string, pullNumber: number) {
+  const octokit = await getOctokit();
+  const result = await octokit.graphql<ReviewThreadsResponse>(
+    `query PullRequestReviewThreads($owner: String!, $repo: String!, $number: Int!) {
+      repository(owner: $owner, name: $repo) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 100) {
+            nodes {
+              id
+              isResolved
+              path
+              line
+              startLine
+              diffSide
+              startDiffSide
+              comments(first: 100) {
+                nodes {
+                  id
+                  databaseId
+                  bodyText
+                  url
+                  createdAt
+                  path
+                  line
+                  author {
+                    login
+                    avatarUrl
+                    url
+                  }
+                  replyTo {
+                    databaseId
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }`,
+    { owner, repo, number: pullNumber },
+  );
+
+  return (
+    result.repository.pullRequest?.reviewThreads.nodes.map((thread) => ({
+      id: thread.id,
+      isResolved: thread.isResolved,
+      path: thread.path,
+      line: thread.line,
+      side: thread.diffSide,
+      startLine: thread.startLine,
+      startSide: thread.startDiffSide,
+      comments: thread.comments.nodes.map((comment) => ({
+        id: comment.id,
+        databaseId: comment.databaseId,
+        body: comment.bodyText,
+        url: comment.url,
+        createdAt: comment.createdAt,
+        author: comment.author,
+        path: comment.path,
+        line: comment.line,
+        side: thread.diffSide,
+        replyToDatabaseId: comment.replyTo?.databaseId,
+      })),
+    })) ?? []
+  ) satisfies ReviewThread[];
+}
+
+export async function createPendingReview(input: SubmitReviewInput) {
+  const octokit = await getOctokit();
+  const { data } = await octokit.rest.pulls.createReview({
+    owner: input.owner,
+    repo: input.repo,
+    pull_number: input.pullNumber,
+    commit_id: input.comments[0]?.commit_id,
+    body: input.body,
+    comments: input.comments.map(stripCommentCommitId),
+  });
+
+  return data;
+}
+
+export async function submitReview(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  reviewId: number,
+  event: SubmitReviewInput["event"],
+  body: string,
+) {
+  const octokit = await getOctokit();
+  const { data } = await octokit.rest.pulls.submitReview({
+    owner,
+    repo,
+    pull_number: pullNumber,
+    review_id: reviewId,
+    event,
+    body,
+  });
+
+  return data;
+}
+
+export async function replyToReviewComment(
+  owner: string,
+  repo: string,
+  pullNumber: number,
+  commentId: number,
+  body: string,
+) {
+  const octokit = await getOctokit();
+  const { data } = await octokit.rest.pulls.createReplyForReviewComment({
+    owner,
+    repo,
+    pull_number: pullNumber,
+    comment_id: commentId,
+    body,
+  });
+
+  return data;
+}
+
+export async function resolveReviewThread(threadId: string) {
+  const octokit = await getOctokit();
+  return octokit.graphql(
+    `mutation ResolveReviewThread($threadId: ID!) {
+      resolveReviewThread(input: { threadId: $threadId }) {
+        thread {
+          id
+          isResolved
+        }
+      }
+    }`,
+    { threadId },
+  );
+}
+
+export async function unresolveReviewThread(threadId: string) {
+  const octokit = await getOctokit();
+  return octokit.graphql(
+    `mutation UnresolveReviewThread($threadId: ID!) {
+      unresolveReviewThread(input: { threadId: $threadId }) {
+        thread {
+          id
+          isResolved
+        }
+      }
+    }`,
+    { threadId },
+  );
+}
+
+async function getOctokit() {
+  const auth = await requireAccessToken();
+  return new Octokit({ auth });
+}
+
+function toPullRequest(pull: {
+  number: number;
+  title: string;
+  state: string;
+  draft?: boolean;
+  updated_at: string;
+  html_url: string;
+  user: { login: string } | null;
+  head: { sha: string; ref: string };
+  base: { ref: string };
+  additions?: number;
+  deletions?: number;
+  changed_files?: number;
+}) {
+  return {
+    number: pull.number,
+    title: pull.title,
+    state: pull.state,
+    draft: pull.draft ?? false,
+    updatedAt: pull.updated_at,
+    htmlUrl: pull.html_url,
+    author: pull.user?.login ?? null,
+    headSha: pull.head.sha,
+    headRef: pull.head.ref,
+    baseRef: pull.base.ref,
+    additions: pull.additions ?? 0,
+    deletions: pull.deletions ?? 0,
+    changedFiles: pull.changed_files ?? 0,
+  };
+}
+
+function stripCommentCommitId(comment: ReviewCommentDraft) {
+  return {
+    path: comment.path,
+    body: comment.body,
+    line: comment.line,
+    side: comment.side,
+    ...(comment.start_line ? { start_line: comment.start_line } : {}),
+    ...(comment.start_side ? { start_side: comment.start_side } : {}),
+  };
+}
+
+type ReviewThreadsResponse = {
+  repository: {
+    pullRequest: {
+      reviewThreads: {
+        nodes: Array<{
+          id: string;
+          isResolved: boolean;
+          path: string;
+          line: number | null;
+          startLine: number | null;
+          diffSide: "LEFT" | "RIGHT" | null;
+          startDiffSide: "LEFT" | "RIGHT" | null;
+          comments: {
+            nodes: ReviewThreadCommentNode[];
+          };
+        }>;
+      };
+    } | null;
+  };
+};
+
+type ReviewThreadCommentNode = {
+  id: string;
+  databaseId: number | null;
+  bodyText: string;
+  url: string;
+  createdAt: string;
+  path: string;
+  line: number | null;
+  author: {
+    login: string;
+    avatarUrl: string;
+    url: string;
+  } | null;
+  replyTo?: {
+    databaseId: number | null;
+  } | null;
+};
