@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { ReviewClient } from "@/components/review-client";
+import { ReviewClient } from "@/components/review/review-client";
 import { getAuthSession } from "@/lib/auth";
 import { adaptPullFile } from "@/lib/diff-adapter";
 import { getPullFiles, getPullRequest, getReviewThreads } from "@/lib/github";

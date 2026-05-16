@@ -1,16 +1,16 @@
-import type { PullFile } from "@/lib/github";
+import type { PullFile, ReviewThread } from "@/lib/github-types";
 
 export type DiffSide = "LEFT" | "RIGHT";
 export type PierreSide = "deletions" | "additions";
 
 export type ReviewCoordinate = {
   path: string;
-  commit_id: string;
+  commitId: string;
   line: number;
   side: DiffSide;
-  start_line?: number;
-  start_side?: DiffSide;
-  diff_index: number;
+  startLine?: number;
+  startSide?: DiffSide;
+  diffIndex: number;
 };
 
 export type RenderedDiffFile = PullFile & {
@@ -29,6 +29,36 @@ export function toGitHubSide(side: PierreSide): DiffSide {
 
 export function coordinateKey(side: PierreSide, line: number) {
   return `${side}:${line}`;
+}
+
+export function canSelectCoordinate(file: RenderedDiffFile, side: PierreSide, line: number) {
+  return Boolean(file.coordinates[coordinateKey(side, line)]);
+}
+
+export function coordinateForThread(file: RenderedDiffFile, thread: ReviewThread) {
+  if (thread.path !== file.filename || !thread.line || !thread.side) {
+    return null;
+  }
+
+  const side = toPierreSide(thread.side);
+  const directCoordinate = file.coordinates[coordinateKey(side, thread.line)];
+
+  if (directCoordinate) {
+    return { side, line: thread.line };
+  }
+
+  if (thread.side === "RIGHT") {
+    const contextCoordinate = Object.entries(file.coordinates).find(
+      ([key, coordinate]) =>
+        key.startsWith("deletions:") && coordinate.side === "RIGHT" && coordinate.line === thread.line,
+    );
+
+    if (contextCoordinate) {
+      return { side: "deletions" as const, line: Number(contextCoordinate[0].split(":")[1]) };
+    }
+  }
+
+  return null;
 }
 
 export function adaptPullFile(file: PullFile, commitId: string): RenderedDiffFile {
@@ -60,13 +90,13 @@ export function coordinateForSelection(
   }
 
   const [rangeStart, rangeEnd] =
-    startAnchor.diff_index <= endAnchor.diff_index ? [startAnchor, endAnchor] : [endAnchor, startAnchor];
+    startAnchor.diffIndex <= endAnchor.diffIndex ? [startAnchor, endAnchor] : [endAnchor, startAnchor];
 
   if (rangeStart.line !== rangeEnd.line || rangeStart.side !== rangeEnd.side) {
     return {
       ...rangeEnd,
-      start_line: rangeStart.line,
-      start_side: rangeStart.side,
+      startLine: rangeStart.line,
+      startSide: rangeStart.side,
     };
   }
 
@@ -121,10 +151,10 @@ function buildCoordinates(file: PullFile, commitId: string) {
     if (rawLine.startsWith("+")) {
       coordinates[coordinateKey("additions", newLine)] = {
         path: file.filename,
-        commit_id: commitId,
+        commitId,
         line: newLine,
         side: "RIGHT",
-        diff_index: diffIndex,
+        diffIndex,
       };
       newLine += 1;
       diffIndex += 1;
@@ -134,10 +164,10 @@ function buildCoordinates(file: PullFile, commitId: string) {
     if (rawLine.startsWith("-")) {
       coordinates[coordinateKey("deletions", oldLine)] = {
         path: file.filename,
-        commit_id: commitId,
+        commitId,
         line: oldLine,
         side: "LEFT",
-        diff_index: diffIndex,
+        diffIndex,
       };
       oldLine += 1;
       diffIndex += 1;
@@ -146,17 +176,17 @@ function buildCoordinates(file: PullFile, commitId: string) {
 
     coordinates[coordinateKey("deletions", oldLine)] = {
       path: file.filename,
-      commit_id: commitId,
+      commitId,
       line: newLine,
       side: "RIGHT",
-      diff_index: diffIndex,
+      diffIndex,
     };
     coordinates[coordinateKey("additions", newLine)] = {
       path: file.filename,
-      commit_id: commitId,
+      commitId,
       line: newLine,
       side: "RIGHT",
-      diff_index: diffIndex,
+      diffIndex,
     };
     oldLine += 1;
     newLine += 1;
