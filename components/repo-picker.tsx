@@ -14,7 +14,7 @@ import {
   Stack,
   Text,
 } from "@chakra-ui/react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   FiFolder,
@@ -24,7 +24,7 @@ import {
   FiRefreshCcw,
   FiSearch,
 } from "react-icons/fi";
-import type { PullRequest, RecentRepoWithPullRequests, Repo } from "@/lib/github";
+import type { PullRequest, RecentRepoWithPullRequests, Repo } from "@/lib/github-types";
 
 type Props = {
   repos: Repo[];
@@ -41,6 +41,7 @@ export function RepoPicker({ repos, recentRepos }: Props) {
   const [pullInput, setPullInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const pullRequestSequence = useRef(0);
 
   const selected = useMemo(
     () => repos.find((repo) => repo.fullName === selectedRepo),
@@ -64,6 +65,7 @@ export function RepoPicker({ repos, recentRepos }: Props) {
   }, [selected]);
 
   function chooseRepo(repo: Repo) {
+    pullRequestSequence.current += 1;
     setSelectedRepo(repo.fullName);
     setRepoQuery(repo.fullName);
     setRepoPickerOpen(false);
@@ -73,6 +75,8 @@ export function RepoPicker({ repos, recentRepos }: Props) {
   }
 
   async function loadPulls(repo: Repo, search: string) {
+    const requestId = pullRequestSequence.current + 1;
+    pullRequestSequence.current = requestId;
     setLoading(true);
     setError("");
 
@@ -84,11 +88,19 @@ export function RepoPicker({ repos, recentRepos }: Props) {
         throw new Error("Unable to load PRs");
       }
 
-      setPulls((await response.json()) as PullRequest[]);
+      const nextPulls = (await response.json()) as PullRequest[];
+
+      if (pullRequestSequence.current === requestId) {
+        setPulls(nextPulls);
+      }
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Unable to load PRs");
+      if (pullRequestSequence.current === requestId) {
+        setError(loadError instanceof Error ? loadError.message : "Unable to load PRs");
+      }
     } finally {
-      setLoading(false);
+      if (pullRequestSequence.current === requestId) {
+        setLoading(false);
+      }
     }
   }
 
@@ -243,6 +255,7 @@ export function RepoPicker({ repos, recentRepos }: Props) {
                   setRepoQuery(next);
                   setRepoPickerOpen(true);
                   if (next !== selectedRepo) {
+                    pullRequestSequence.current += 1;
                     setSelectedRepo("");
                     setPulls([]);
                   }

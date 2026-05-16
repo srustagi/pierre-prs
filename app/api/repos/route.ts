@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isGitHubSignInRequired } from "@/lib/auth";
 import { getRepos } from "@/lib/github";
 
 export async function GET() {
@@ -7,7 +8,7 @@ export async function GET() {
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to load repositories" },
-      { status: 401 },
+      { status: isGitHubSignInRequired(error) ? 401 : 400 },
     );
   }
 }

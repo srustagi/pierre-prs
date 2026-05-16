@@ -1,101 +1,38 @@
 import { Octokit } from "@octokit/rest";
 import { requireAccessToken } from "@/lib/auth";
-
-export type Repo = {
-  id: number;
-  fullName: string;
-  owner: string;
-  name: string;
-  private: boolean;
-  updatedAt: string | null;
-};
-
-export type PullRequest = {
-  number: number;
-  title: string;
-  state: string;
-  draft: boolean;
-  updatedAt: string;
-  htmlUrl: string;
-  author: string | null;
-  headSha: string;
-  headRef: string;
-  baseRef: string;
-  additions: number;
-  deletions: number;
-  changedFiles: number;
-};
-
-export type PullRequestSummary = Pick<
+import type {
+  PullFile,
   PullRequest,
-  "number" | "title" | "draft" | "updatedAt" | "htmlUrl" | "author"
->;
+  RecentRepoWithPullRequests,
+  Repo,
+  ReviewCommentDraft,
+  ReviewCommentReplyInput,
+  ReviewThread,
+  SubmitReviewInput,
+  SubmitReviewRequest,
+} from "@/lib/github-types";
 
-export type RecentRepoWithPullRequests = Repo & {
-  openPullRequestCount: number;
-  latestPullUpdatedAt: string;
-  recentPullRequests: PullRequestSummary[];
+type CreateReviewResponse = Awaited<ReturnType<Octokit["rest"]["pulls"]["createReview"]>>["data"];
+type SubmitReviewResponse = Awaited<ReturnType<Octokit["rest"]["pulls"]["submitReview"]>>["data"];
+type ReviewCommentReplyResponse = Awaited<
+  ReturnType<Octokit["rest"]["pulls"]["createReplyForReviewComment"]>
+>["data"];
+type ReviewThreadResolutionResponse = {
+  resolveReviewThread?: {
+    thread: {
+      id: string;
+      isResolved: boolean;
+    };
+  };
+  unresolveReviewThread?: {
+    thread: {
+      id: string;
+      isResolved: boolean;
+    };
+  };
 };
 
-export type PullFile = {
-  filename: string;
-  previousFilename?: string;
-  status: string;
-  additions: number;
-  deletions: number;
-  changes: number;
-  patch?: string;
-  blobUrl: string;
-};
-
-export type ReviewThreadComment = {
-  id: string;
-  databaseId: number | null;
-  body: string;
-  url: string;
-  createdAt: string;
-  author: {
-    login: string;
-    avatarUrl: string;
-    url: string;
-  } | null;
-  path: string;
-  line: number | null;
-  side: "LEFT" | "RIGHT" | null;
-  replyToDatabaseId?: number | null;
-};
-
-export type ReviewThread = {
-  id: string;
-  isResolved: boolean;
-  path: string;
-  line: number | null;
-  side: "LEFT" | "RIGHT" | null;
-  startLine: number | null;
-  startSide: "LEFT" | "RIGHT" | null;
-  comments: ReviewThreadComment[];
-};
-
-export type ReviewCommentDraft = {
-  path: string;
-  body: string;
-  commit_id: string;
-  line: number;
-  side: "LEFT" | "RIGHT";
-  start_line?: number;
-  start_side?: "LEFT" | "RIGHT";
-};
-
-export type SubmitReviewInput = {
-  owner: string;
-  repo: string;
-  pullNumber: number;
-  event: "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
-  body: string;
-  comments: ReviewCommentDraft[];
-};
-
-export async function getRepos() {
+export async function getRepos(): Promise<Repo[]> {
   const octokit = await getOctokit();
   const repos = await octokit.paginate(octokit.rest.repos.listForAuthenticatedUser, {
     affiliation: "owner,collaborator,organization_member",
@@ -114,7 +51,7 @@ export async function getRepos() {
   })) satisfies Repo[];
 }
 
-export async function getRecentReposWithPullRequests() {
+export async function getRecentReposWithPullRequests(): Promise<RecentRepoWithPullRequests[]> {
   const octokit = await getOctokit();
   const result = await octokit.graphql<RecentReposWithPullRequestsResponse>(
     `query RecentReposWithPullRequests {
@@ -180,7 +117,7 @@ export async function getRecentReposWithPullRequests() {
     .slice(0, 10) satisfies RecentRepoWithPullRequests[];
 }
 
-export async function getPullRequests(owner: string, repo: string, search?: string) {
+export async function getPullRequests(owner: string, repo: string, search?: string): Promise<PullRequest[]> {
   const octokit = await getOctokit();
   const pulls = await octokit.paginate(octokit.rest.pulls.list, {
     owner,
@@ -201,7 +138,7 @@ export async function getPullRequests(owner: string, repo: string, search?: stri
   return filtered.slice(0, 10).map(toPullRequest) satisfies PullRequest[];
 }
 
-export async function getPullRequest(owner: string, repo: string, pullNumber: number) {
+export async function getPullRequest(owner: string, repo: string, pullNumber: number): Promise<PullRequest> {
   const octokit = await getOctokit();
   const { data } = await octokit.rest.pulls.get({
     owner,
@@ -212,7 +149,7 @@ export async function getPullRequest(owner: string, repo: string, pullNumber: nu
   return toPullRequest(data);
 }
 
-export async function getPullFiles(owner: string, repo: string, pullNumber: number) {
+export async function getPullFiles(owner: string, repo: string, pullNumber: number): Promise<PullFile[]> {
   const octokit = await getOctokit();
   const files = await octokit.paginate(octokit.rest.pulls.listFiles, {
     owner,
@@ -233,7 +170,7 @@ export async function getPullFiles(owner: string, repo: string, pullNumber: numb
   })) satisfies PullFile[];
 }
 
-export async function getReviewThreads(owner: string, repo: string, pullNumber: number) {
+export async function getReviewThreads(owner: string, repo: string, pullNumber: number): Promise<ReviewThread[]> {
   const octokit = await getOctokit();
   const threads: ReviewThreadNode[] = [];
   let threadCursor: string | null = null;
@@ -392,13 +329,13 @@ async function getRemainingReviewThreadComments(
   return comments;
 }
 
-export async function createPendingReview(input: SubmitReviewInput) {
+export async function createPendingReview(input: SubmitReviewInput): Promise<CreateReviewResponse> {
   const octokit = await getOctokit();
   const { data } = await octokit.rest.pulls.createReview({
     owner: input.owner,
     repo: input.repo,
     pull_number: input.pullNumber,
-    commit_id: input.comments[0]?.commit_id,
+    commit_id: input.comments[0]?.commitId,
     body: input.body,
     comments: input.comments.map(stripCommentCommitId),
   });
@@ -406,49 +343,36 @@ export async function createPendingReview(input: SubmitReviewInput) {
   return data;
 }
 
-export async function submitReview(
-  owner: string,
-  repo: string,
-  pullNumber: number,
-  reviewId: number,
-  event: SubmitReviewInput["event"],
-  body: string,
-) {
+export async function submitReview(input: SubmitReviewRequest): Promise<SubmitReviewResponse> {
   const octokit = await getOctokit();
   const { data } = await octokit.rest.pulls.submitReview({
-    owner,
-    repo,
-    pull_number: pullNumber,
-    review_id: reviewId,
-    event,
-    body,
+    owner: input.owner,
+    repo: input.repo,
+    pull_number: input.pullNumber,
+    review_id: input.reviewId,
+    event: input.event,
+    body: input.body,
   });
 
   return data;
 }
 
-export async function replyToReviewComment(
-  owner: string,
-  repo: string,
-  pullNumber: number,
-  commentId: number,
-  body: string,
-) {
+export async function replyToReviewComment(input: ReviewCommentReplyInput): Promise<ReviewCommentReplyResponse> {
   const octokit = await getOctokit();
   const { data } = await octokit.rest.pulls.createReplyForReviewComment({
-    owner,
-    repo,
-    pull_number: pullNumber,
-    comment_id: commentId,
-    body,
+    owner: input.owner,
+    repo: input.repo,
+    pull_number: input.pullNumber,
+    comment_id: input.commentId,
+    body: input.body,
   });
 
   return data;
 }
 
-export async function resolveReviewThread(threadId: string) {
+export async function resolveReviewThread(threadId: string): Promise<ReviewThreadResolutionResponse> {
   const octokit = await getOctokit();
-  return octokit.graphql(
+  return octokit.graphql<ReviewThreadResolutionResponse>(
     `mutation ResolveReviewThread($threadId: ID!) {
       resolveReviewThread(input: { threadId: $threadId }) {
         thread {
@@ -461,9 +385,9 @@ export async function resolveReviewThread(threadId: string) {
   );
 }
 
-export async function unresolveReviewThread(threadId: string) {
+export async function unresolveReviewThread(threadId: string): Promise<ReviewThreadResolutionResponse> {
   const octokit = await getOctokit();
-  return octokit.graphql(
+  return octokit.graphql<ReviewThreadResolutionResponse>(
     `mutation UnresolveReviewThread($threadId: ID!) {
       unresolveReviewThread(input: { threadId: $threadId }) {
         thread {
@@ -518,8 +442,8 @@ function stripCommentCommitId(comment: ReviewCommentDraft) {
     body: comment.body,
     line: comment.line,
     side: comment.side,
-    ...(comment.start_line ? { start_line: comment.start_line } : {}),
-    ...(comment.start_side ? { start_side: comment.start_side } : {}),
+    ...(comment.startLine ? { start_line: comment.startLine } : {}),
+    ...(comment.startSide ? { start_side: comment.startSide } : {}),
   };
 }
 

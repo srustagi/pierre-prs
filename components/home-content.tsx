@@ -2,10 +2,10 @@
 
 import { Box, Button, Container, Flex, HStack, Heading, Text, VStack } from "@chakra-ui/react";
 import { FiMoon, FiSun } from "react-icons/fi";
-import { usePrTheme } from "@/app/provider";
+import { usePrTheme } from "@/components/theme-provider";
 import { SignInButton, SignOutButton } from "@/components/auth-button";
 import { RepoPicker } from "@/components/repo-picker";
-import type { RecentRepoWithPullRequests, Repo } from "@/lib/github";
+import type { RecentRepoWithPullRequests, Repo } from "@/lib/github-types";
 
 type Props =
   | {

@@ -1,17 +1,18 @@
 import { NextResponse } from "next/server";
+import { isGitHubSignInRequired } from "@/lib/auth";
 import { resolveReviewThread, unresolveReviewThread } from "@/lib/github";
 
 export async function POST(request: Request) {
-  const input = (await request.json()) as {
-    threadId?: string;
-    resolved?: boolean;
-  };
-
-  if (!input.threadId || typeof input.resolved !== "boolean") {
-    return NextResponse.json({ error: "Missing thread target" }, { status: 400 });
-  }
-
   try {
+    const input = (await request.json()) as {
+      threadId?: string;
+      resolved?: boolean;
+    };
+
+    if (!input.threadId || typeof input.resolved !== "boolean") {
+      return NextResponse.json({ error: "Missing thread target" }, { status: 400 });
+    }
+
     const result = input.resolved
       ? await resolveReviewThread(input.threadId)
       : await unresolveReviewThread(input.threadId);
@@ -20,7 +21,7 @@ export async function POST(request: Request) {
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Unable to update thread" },
-      { status: 400 },
+      { status: isGitHubSignInRequired(error) ? 401 : 400 },
     );
   }
 }
